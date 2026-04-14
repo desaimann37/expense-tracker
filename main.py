@@ -1,15 +1,41 @@
 from fastmcp import FastMCP
 import os
-import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "expenses.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = DATABASE_URL is not None
+
+if USE_POSTGRES:
+    import psycopg2
+    import psycopg2.extras
+else:
+    import sqlite3
+    DB_PATH = os.path.join(os.path.dirname(__file__), "expenses.db")
 
 mcp = FastMCP("ExpenseTracker")
 
 
+def get_conn():
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    return sqlite3.connect(DB_PATH)
+
+
 def init_db():
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    if USE_POSTGRES:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS expenses(
+                id SERIAL PRIMARY KEY,
+                date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                subcategory TEXT DEFAULT '',
+                note TEXT DEFAULT ''
+            )
+        """)
+    else:
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS expenses(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
@@ -19,6 +45,9 @@ def init_db():
                 note TEXT DEFAULT ''
             )
         """)
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 init_db()
@@ -26,80 +55,88 @@ init_db()
 
 @mcp.tool()
 def add_expense(date, amount, category, subcategory="", note=""):
-    '''Add an expense to the database.'''
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
-            "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
-            (date, amount, category, subcategory, note)
-        )
-    return {"status": "ok", "id": cur.lastrowid}
+    """Add an expense to the database."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+        (date, amount, category, subcategory, note)
+    )
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"status": "ok", "id": row[0]}
+
 
 @mcp.tool()
 def summarize(start_date, end_date, category=None):
     """Summarize expenses by category within an inclusive date range."""
-    with sqlite3.connect(DB_PATH) as c:
-        query = """
-            SELECT category, SUM(amount) AS total_amount
-            FROM expenses
-            WHERE date BETWEEN ? AND ?
-        """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    query = """
+        SELECT category, SUM(amount) AS total_amount
+        FROM expenses
+        WHERE date BETWEEN %s AND %s
+    """
+    params = [start_date, end_date]
+    if category:
+        query += " AND category = %s"
+        params.append(category)
+    query += " GROUP BY category ORDER BY category ASC"
+    cur.execute(query, params)
+    result = [dict(row) for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return result
 
-        params = [start_date, end_date]
 
-        if category:
-            query += " AND category = ?"
-            params.append(category)
-
-        query += " GROUP BY category ORDER BY category ASC"
-
-        cur = c.execute(query, params)
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
-    
 @mcp.tool()
 def list_expenses(start_date, end_date):
     """List expense entries within an inclusive date range."""
-    with sqlite3.connect(DB_PATH) as c:
-        cur = c.execute(
-            """
-            SELECT id, date, amount, category, subcategory, note
-            FROM expenses
-            WHERE date BETWEEN ? AND ?
-            ORDER BY id ASC
-            """,
-            (start_date, end_date)
-        )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
-    
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT id, date, amount, category, subcategory, note
+        FROM expenses
+        WHERE date BETWEEN %s AND %s
+        ORDER BY id ASC
+    """, (start_date, end_date))
+    result = [dict(row) for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return result
+
+
 @mcp.tool()
 def update_expense(expense_id: int, amount: float = None, category: str = None,
                    date: str = None, note: str = None, subcategory: str = None) -> dict:
     """Update an existing expense by its ID."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
     fields = []
     values = []
     if amount is not None:
-        fields.append("amount = ?"); values.append(amount)
+        fields.append("amount = %s"); values.append(amount)
     if category is not None:
-        fields.append("category = ?"); values.append(category)
+        fields.append("category = %s"); values.append(category)
     if date is not None:
-        fields.append("date = ?"); values.append(date)
+        fields.append("date = %s"); values.append(date)
     if note is not None:
-        fields.append("note = ?"); values.append(note)
+        fields.append("note = %s"); values.append(note)
     if subcategory is not None:
-        fields.append("subcategory = ?"); values.append(subcategory)
-    
+        fields.append("subcategory = %s"); values.append(subcategory)
+
     if not fields:
         return {"status": "error", "message": "No fields to update"}
-    
+
     values.append(expense_id)
-    cursor.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = ?", values)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = %s", values)
     conn.commit()
+    cur.close()
     conn.close()
     return {"status": "ok", "updated_id": expense_id}
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
