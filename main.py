@@ -108,6 +108,7 @@ def summarize(start_date, end_date, category=None):
     return result
 
 
+
 @mcp.tool()
 def list_expenses(start_date, end_date):
     """List expense entries within an inclusive date range."""
