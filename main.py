@@ -1,8 +1,8 @@
 from fastmcp import FastMCP
 import os
-
 DATABASE_URL = os.environ.get("DATABASE_URL")
 USE_POSTGRES = DATABASE_URL is not None
+CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
 
 if USE_POSTGRES:
     import psycopg2
@@ -58,34 +58,51 @@ def add_expense(date, amount, category, subcategory="", note=""):
     """Add an expense to the database."""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (%s,%s,%s,%s,%s) RETURNING id",
-        (date, amount, category, subcategory, note)
-    )
-    row = cur.fetchone()
+    if USE_POSTGRES:
+        cur.execute(
+            "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (date, amount, category, subcategory, note)
+        )
+        row = cur.fetchone()
+        expense_id = row[0]
+    else:
+        cur.execute(
+            "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
+            (date, amount, category, subcategory, note)
+        )
+        expense_id = cur.lastrowid
     conn.commit()
     cur.close()
     conn.close()
-    return {"status": "ok", "id": row[0]}
+    return {"status": "ok", "id": expense_id}
 
 
 @mcp.tool()
 def summarize(start_date, end_date, category=None):
     """Summarize expenses by category within an inclusive date range."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    query = """
+    if USE_POSTGRES:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        ph = "%s"
+    else:
+        cur = conn.cursor()
+        ph = "?"
+    query = f"""
         SELECT category, SUM(amount) AS total_amount
         FROM expenses
-        WHERE date BETWEEN %s AND %s
+        WHERE date BETWEEN {ph} AND {ph}
     """
     params = [start_date, end_date]
     if category:
-        query += " AND category = %s"
+        query += f" AND category = {ph}"
         params.append(category)
     query += " GROUP BY category ORDER BY category ASC"
     cur.execute(query, params)
-    result = [dict(row) for row in cur.fetchall()]
+    if USE_POSTGRES:
+        result = [dict(row) for row in cur.fetchall()]
+    else:
+        cols = [d[0] for d in cur.description]
+        result = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()
     return result
@@ -95,14 +112,22 @@ def summarize(start_date, end_date, category=None):
 def list_expenses(start_date, end_date):
     """List expense entries within an inclusive date range."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    ph = "%s" if USE_POSTGRES else "?"
+    if USE_POSTGRES:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    else:
+        cur = conn.cursor()
+    cur.execute(f"""
         SELECT id, date, amount, category, subcategory, note
         FROM expenses
-        WHERE date BETWEEN %s AND %s
+        WHERE date BETWEEN {ph} AND {ph}
         ORDER BY id ASC
     """, (start_date, end_date))
-    result = [dict(row) for row in cur.fetchall()]
+    if USE_POSTGRES:
+        result = [dict(row) for row in cur.fetchall()]
+    else:
+        cols = [d[0] for d in cur.description]
+        result = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()
     return result
@@ -112,18 +137,19 @@ def list_expenses(start_date, end_date):
 def update_expense(expense_id: int, amount: float = None, category: str = None,
                    date: str = None, note: str = None, subcategory: str = None) -> dict:
     """Update an existing expense by its ID."""
+    ph = "%s" if USE_POSTGRES else "?"
     fields = []
     values = []
     if amount is not None:
-        fields.append("amount = %s"); values.append(amount)
+        fields.append(f"amount = {ph}"); values.append(amount)
     if category is not None:
-        fields.append("category = %s"); values.append(category)
+        fields.append(f"category = {ph}"); values.append(category)
     if date is not None:
-        fields.append("date = %s"); values.append(date)
+        fields.append(f"date = {ph}"); values.append(date)
     if note is not None:
-        fields.append("note = %s"); values.append(note)
+        fields.append(f"note = {ph}"); values.append(note)
     if subcategory is not None:
-        fields.append("subcategory = %s"); values.append(subcategory)
+        fields.append(f"subcategory = {ph}"); values.append(subcategory)
 
     if not fields:
         return {"status": "error", "message": "No fields to update"}
@@ -131,11 +157,18 @@ def update_expense(expense_id: int, amount: float = None, category: str = None,
     values.append(expense_id)
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = %s", values)
+    cur.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = {ph}", values)
     conn.commit()
     cur.close()
     conn.close()
     return {"status": "ok", "updated_id": expense_id}
+
+
+@mcp.resource("expense://categories", mime_type="application/json")
+def categories():
+    """Return the list of valid expense categories and subcategories."""
+    with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 if __name__ == "__main__":
