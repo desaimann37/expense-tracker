@@ -4,13 +4,11 @@ An AI-powered expense tracking server built with [FastMCP](https://gofastmcp.com
 
 ## Live Server
 
-```
-https://expense-tracker-qaqi.onrender.com/mcp
-```
+Deploy your own instance on Render (see [Run Your Own Deployment](#run-your-own-deployment)) and connect any MCP client to your server URL:
 
-No setup needed to test — connect any MCP client to this URL.
-
-> **Note:** This is a shared demo server. Data added here is visible to anyone connected to the same URL.
+```
+https://<your-app>.onrender.com/mcp
+```
 
 ---
 
@@ -19,8 +17,8 @@ No setup needed to test — connect any MCP client to this URL.
 Ask Claude things like:
 
 ```
-"Add ₹1500 for groceries today"
-"I paid ₹15000 rent on April 1st, set it as recurring every month"
+"Add $1500 for groceries today"
+"I paid $15000 rent on April 1st, set it as recurring every month"
 "Am I on track with my food budget this month?"
 "How did I do in April? Give me a full report"
 "Show my top 5 expenses this month"
@@ -28,7 +26,7 @@ Ask Claude things like:
 "Delete all my food expenses from last week"
 "Show me what I deleted — restore the food ones"
 "What's my spending trend over the last 3 months?"
-"Set a ₹5000 monthly budget for food"
+"Set a $5000 monthly budget for food"
 "Apply my recurring expenses for this month"
 ```
 
@@ -108,7 +106,7 @@ http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<your-token>
 
 **3. Connect to the live server**
 - Transport → `Streamable HTTP`
-- URL → `https://expense-tracker-qaqi.onrender.com/mcp`
+- URL → `https://<your-app>.onrender.com/mcp`
 - Click **Connect**
 
 **4. Test any tool from the browser UI**
@@ -161,7 +159,7 @@ File location:
 ## Connect to claude.ai Web (Remote)
 
 1. Go to [claude.ai](https://claude.ai) → Settings → Connectors → `+`
-2. Paste: `https://expense-tracker-qaqi.onrender.com/mcp`
+2. Paste your deployed server URL: `https://<your-app>.onrender.com/mcp`
 3. Save — all tools load automatically
 
 ---

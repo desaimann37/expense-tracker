@@ -928,11 +928,10 @@ claude.ai ──HTTPS──► Cloudflare ──► cloudflared ──► main.p
 ## Step 8 — Connecting claude.ai Web
 
 1. claude.ai → Settings → Connectors → `+`
-2. Paste the deployed server URL:
+2. Paste your deployed server URL:
    ```
-   https://expense-tracker-qaqi.onrender.com/mcp
+   https://<your-app>.onrender.com/mcp
    ```
-   (If running your own deployment, replace with your Render URL)
 3. Save — all 21 tools load automatically
 
 ---
@@ -954,7 +953,7 @@ npx @modelcontextprotocol/inspector
 ### Connect
 - Open printed URL: `http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<token>`
 - Transport → `Streamable HTTP`
-- URL → `https://expense-tracker-qaqi.onrender.com/mcp`
+- URL → `https://<your-app>.onrender.com/mcp`
 - Click Connect
 
 ### Inspector proxy architecture
@@ -1024,17 +1023,17 @@ Browser ──► Inspector UI ──► Proxy ──► MCP Server
 
 ```
 # Daily use
-"Add ₹200 for coffee today"
-"I spent ₹3500 on groceries — log it under food"
+"Add $200 for coffee today"
+"I spent $3500 on groceries — log it under food"
 "What did I spend today?"
 
 # Budgets
-"Set a ₹8000 monthly budget for food"
+"Set a $8000 monthly budget for food"
 "How am I doing on my budget this month?"
 "Show all my budgets"
 
 # Recurring
-"Set rent as ₹15000 recurring on the 1st of every month"
+"Set rent as $15000 recurring on the 1st of every month"
 "Apply my recurring expenses"
 "Stop my Netflix recurring"
 
@@ -1046,7 +1045,7 @@ Browser ──► Inspector UI ──► Proxy ──► MCP Server
 
 # Search
 "Find all Zomato expenses"
-"Show expenses over ₹5000 in April"
+"Show expenses over $5000 in April"
 "Search for anything tagged 'business trip'"
 
 # Delete & restore
