@@ -52,10 +52,9 @@ def init_db():
 
 init_db()
 
-
 @mcp.tool()
 def add_expense(date, amount, category, subcategory="", note=""):
-    """Add an expense to the database."""
+    """Add a new expense entry to the database."""
     conn = get_conn()
     cur = conn.cursor()
     if USE_POSTGRES:
@@ -63,8 +62,7 @@ def add_expense(date, amount, category, subcategory="", note=""):
             "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (%s,%s,%s,%s,%s) RETURNING id",
             (date, amount, category, subcategory, note)
         )
-        row = cur.fetchone()
-        expense_id = row[0]
+        expense_id = cur.fetchone()[0]
     else:
         cur.execute(
             "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
