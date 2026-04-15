@@ -1,75 +1,92 @@
 # Expense Tracker MCP Server
 
-An AI-powered expense tracking server built with [FastMCP](https://gofastmcp.com), deployable to the cloud and accessible from Claude Desktop and claude.ai web.
+An AI-powered expense tracking server built with [FastMCP](https://gofastmcp.com), deployed on Render with PostgreSQL. Connect it to Claude and manage your finances using natural language — no forms, no dashboards, just conversation.
 
 ## Live Server
 
-The server is deployed and running at:
 ```
 https://expense-tracker-qaqi.onrender.com/mcp
 ```
-No setup needed to test — just connect your MCP client to this URL.
+
+No setup needed to test — connect any MCP client to this URL.
+
+> **Note:** This is a shared demo server. Data added here is visible to anyone connected to the same URL.
 
 ---
 
-## Features
+## What It Can Do
 
-- Add expenses with date, amount, category, subcategory, and notes
-- List expenses within a date range
-- Summarize expenses by category
-- Update existing expenses by ID
-- Soft-delete single transactions or entire categories
-- Restore deleted transactions (full rollback)
-- View deleted transaction history
-- Category taxonomy via a JSON resource
-- Works locally (SQLite) and in the cloud (PostgreSQL)
-- Accessible from Claude Desktop and claude.ai web
+Ask Claude things like:
+
+```
+"Add ₹1500 for groceries today"
+"I paid ₹15000 rent on April 1st, set it as recurring every month"
+"Am I on track with my food budget this month?"
+"How did I do in April? Give me a full report"
+"Show my top 5 expenses this month"
+"Search for all Swiggy expenses"
+"Delete all my food expenses from last week"
+"Show me what I deleted — restore the food ones"
+"What's my spending trend over the last 3 months?"
+"Set a ₹5000 monthly budget for food"
+"Apply my recurring expenses for this month"
+```
 
 ---
 
-## Tools
+## Tools (21 total)
 
+### Core
 | Tool | Description |
 |------|-------------|
 | `add_expense` | Add a new expense |
-| `list_expenses` | List active expenses in a date range |
-| `summarize` | Summarize totals by category |
-| `update_expense` | Update an existing expense by ID |
-| `delete_expense` | Soft-delete a single expense by ID |
-| `delete_category` | Soft-delete all expenses in a category |
-| `list_deleted_expenses` | View deleted expenses (optionally filter by category) |
-| `restore_expense` | Restore a single deleted expense by ID |
+| `list_expenses` | List active expenses in a date range (filter by category/subcategory) |
+| `summarize` | Total spending by category or subcategory |
+| `update_expense` | Edit an existing expense by ID |
+| `search_expenses` | Keyword + amount + date + category search |
+| `top_expenses` | Largest individual expenses in a range |
+
+### Soft-Delete & Restore
+| Tool | Description |
+|------|-------------|
+| `delete_expense` | Soft-delete a single expense (restorable) |
+| `delete_category` | Soft-delete all expenses in a category at once |
+| `list_deleted_expenses` | View deleted expenses with timestamps |
+| `restore_expense` | Restore a single deleted expense |
 | `restore_category` | Restore all deleted expenses in a category |
 
-## Resources
+### Budgets
+| Tool | Description |
+|------|-------------|
+| `set_budget` | Set a monthly/weekly/yearly spending limit for a category |
+| `get_budget_status` | Compare actual spending vs budget with % used and status |
+| `list_budgets` | View all configured budgets |
+| `delete_budget` | Remove a budget |
 
+### Recurring Expenses
+| Tool | Description |
+|------|-------------|
+| `add_recurring` | Create a recurring expense template (rent, Netflix, EMI, etc.) |
+| `list_recurring` | View all active recurring templates |
+| `apply_recurring` | Auto-generate missing expense entries for all recurring templates (idempotent) |
+| `delete_recurring` | Stop a recurring expense template |
+
+### Analytics
+| Tool | Description |
+|------|-------------|
+| `monthly_report` | Full monthly summary: total, by category, top 5, budget alerts, daily totals |
+| `spending_trend` | Month-over-month spending with % change for last N months |
+
+## Resources
 | Resource | Description |
 |----------|-------------|
-| `expense://categories` | JSON list of valid categories and subcategories |
+| `expense://categories` | JSON list of 20 valid categories and subcategories |
 
 ---
 
-## Tech Stack
+## Test with MCP Inspector
 
-| Component | Technology |
-|-----------|-----------|
-| MCP Framework | FastMCP 3.2.x |
-| Language | Python 3.13+ |
-| Package Manager | uv |
-| Local Database | SQLite |
-| Cloud Database | PostgreSQL (Render) |
-| Cloud Hosting | Render (free tier) |
-| Transport (local) | stdio |
-| Transport (remote) | streamable-http |
-
----
-
-## Option 1 — Test the Live Server with MCP Inspector
-
-Anyone can test the deployed server without any local setup beyond Node.js.
-
-### Prerequisites
-- [Node.js](https://nodejs.org) v18 or higher
+Anyone can test the live server interactively — no Claude needed, just Node.js.
 
 ### Steps
 
@@ -78,75 +95,37 @@ Anyone can test the deployed server without any local setup beyond Node.js.
 npx @modelcontextprotocol/inspector
 ```
 
-**2. Open the URL it prints**
+If you get cache errors on Windows:
+```bash
+npx clear-npx-cache
+npx @modelcontextprotocol/inspector
+```
 
-It will print something like:
+**2. Open the URL printed in terminal**
 ```
 http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<your-token>
 ```
-Copy and open that full URL in your browser.
 
 **3. Connect to the live server**
-
-In the inspector UI:
-- **Transport** → select `Streamable HTTP`
-- **URL** → paste `https://expense-tracker-qaqi.onrender.com/mcp`
+- Transport → `Streamable HTTP`
+- URL → `https://expense-tracker-qaqi.onrender.com/mcp`
 - Click **Connect**
 
-**4. Explore tools and resources**
+**4. Test any tool from the browser UI**
 
-- Click the **Tools** tab → all 9 tools will be listed
-- Click the **Resources** tab → click `expense://categories` to see all valid categories
-- Click any tool → fill in the parameters → click **Run Tool**
-
-### Example: Add an expense
+Example flow:
 ```
-Tool: add_expense
-date: 2026-04-15
-amount: 150
-category: food
-subcategory: groceries
-note: weekly shopping
+set_budget        → category=food, amount=5000, period=monthly
+add_recurring     → name=Rent, amount=15000, category=housing, frequency=monthly, start_date=2026-04-01
+apply_recurring   → (no params — auto-generates entries for today)
+get_budget_status → period_start=2026-04-01, period_end=2026-04-30
+monthly_report    → year=2026, month=4
+spending_trend    → months=3
 ```
-
-### Example: Summarize expenses
-```
-Tool: summarize
-start_date: 2026-04-01
-end_date: 2026-04-30
-```
-
-### Example: Delete and restore
-```
-# Delete a single expense
-Tool: delete_expense
-expense_id: 5
-
-# See what was deleted
-Tool: list_deleted_expenses
-
-# Restore it
-Tool: restore_expense
-expense_id: 5
-
-# Or delete and restore an entire category
-Tool: delete_category    → category: food
-Tool: restore_category   → category: food
-```
-
-> **Note:** The live server uses a shared PostgreSQL database on Render. Data you add is visible to anyone connecting to the same URL.
 
 ---
 
-## Option 2 — Connect via Claude Desktop (Local)
-
-Run the server locally using stdio transport so Claude Desktop can spawn it automatically.
-
-### Prerequisites
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
-- Python 3.13+
-
-### Steps
+## Connect to Claude Desktop (Local)
 
 **1. Clone the repo**
 ```bash
@@ -157,23 +136,16 @@ cd expense-tracker
 **2. Add to Claude Desktop config**
 
 File location:
-```
-Windows: %APPDATA%\Claude\claude_desktop_config.json
-macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
-```
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Add this entry:
 ```json
 {
   "mcpServers": {
     "expense-tracker": {
       "command": "uv",
       "args": [
-        "run",
-        "--with",
-        "fastmcp",
-        "fastmcp",
-        "run",
+        "run", "--with", "fastmcp", "fastmcp", "run",
         "C:\\path\\to\\expense-tracker\\main.py"
       ],
       "env": {}
@@ -182,68 +154,36 @@ Add this entry:
 }
 ```
 
-Replace `C:\\path\\to\\expense-tracker\\main.py` with the actual path to `main.py` on your machine.
-
-**3. Restart Claude Desktop**
-
-The expense tracker tools will appear automatically. Use natural language:
-```
-"Add an expense of $200 for groceries on 2026-04-15"
-"List all my expenses from April 1 to April 30"
-"Summarize my expenses for this month"
-"Delete all food expenses"
-"Restore the food category"
-```
+**3. Restart Claude Desktop** — all 21 tools appear automatically.
 
 ---
 
-## Option 3 — Connect via claude.ai Web (Remote)
+## Connect to claude.ai Web (Remote)
 
-**1.** Go to [claude.ai](https://claude.ai) → Settings → Connectors → click `+`
-
-**2.** Paste the server URL:
-```
-https://expense-tracker-qaqi.onrender.com/mcp
-```
-
-**3.** Save — all 9 tools load automatically
-
-Now use Claude on the web exactly like Claude Desktop.
+1. Go to [claude.ai](https://claude.ai) → Settings → Connectors → `+`
+2. Paste: `https://expense-tracker-qaqi.onrender.com/mcp`
+3. Save — all tools load automatically
 
 ---
 
-## Option 4 — Run Your Own Deployment
+## Run Your Own Deployment
 
-### Local development
-
+### Local dev
 ```bash
 git clone https://github.com/desaimann37/expense-tracker.git
 cd expense-tracker
 uv sync
 uv run python main.py
+# Server at http://localhost:8000/mcp using SQLite
 ```
 
-Server starts at `http://localhost:8000/mcp` using SQLite.
-
-### Deploy to Render (cloud)
-
-1. Fork this repo to your GitHub account
-2. Go to [render.com](https://render.com) → New Web Service → connect your fork
-3. Set:
-   - **Build Command:** `pip install fastmcp psycopg2-binary`
-   - **Start Command:** `python main.py`
-   - **Plan:** Free
-4. Click Deploy
-
-**Add a persistent PostgreSQL database:**
-
-1. Render dashboard → New → PostgreSQL → Free tier → Create
-2. Copy the **Internal Database URL**
-3. Go to your web service → Environment tab
-4. Add environment variable:
-   - Key: `DATABASE_URL`
-   - Value: your Internal Database URL
-5. Save → auto redeploys
+### Deploy to Render
+1. Fork this repo → go to [render.com](https://render.com) → New Web Service → connect fork
+2. **Build command:** `pip install fastmcp psycopg2-binary`
+3. **Start command:** `python main.py`
+4. Create a free PostgreSQL database on Render
+5. Add env var `DATABASE_URL` → your PostgreSQL internal URL
+6. Deploy — database tables and columns are auto-created on startup
 
 ---
 
@@ -251,27 +191,50 @@ Server starts at `http://localhost:8000/mcp` using SQLite.
 
 ```sql
 CREATE TABLE expenses (
-    id          SERIAL PRIMARY KEY,       -- INTEGER AUTOINCREMENT in SQLite
-    date        TEXT NOT NULL,            -- Format: YYYY-MM-DD
+    id          SERIAL PRIMARY KEY,
+    date        TEXT NOT NULL,            -- YYYY-MM-DD
     amount      REAL NOT NULL,
     category    TEXT NOT NULL,
     subcategory TEXT DEFAULT '',
     note        TEXT DEFAULT '',
-    deleted_at  TEXT DEFAULT NULL         -- NULL = active, timestamp = soft-deleted
+    deleted_at  TEXT DEFAULT NULL,        -- NULL = active, ISO timestamp = soft-deleted
+    recurring_id INTEGER DEFAULT NULL     -- links to recurring_expenses template
+);
+
+CREATE TABLE budgets (
+    id         SERIAL PRIMARY KEY,
+    category   TEXT NOT NULL,
+    amount     REAL NOT NULL,
+    period     TEXT NOT NULL DEFAULT 'monthly',
+    created_at TEXT NOT NULL,
+    UNIQUE(category, period)
+);
+
+CREATE TABLE recurring_expenses (
+    id           SERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    amount       REAL NOT NULL,
+    category     TEXT NOT NULL,
+    subcategory  TEXT DEFAULT '',
+    note         TEXT DEFAULT '',
+    frequency    TEXT NOT NULL,           -- daily | weekly | monthly | yearly
+    start_date   TEXT NOT NULL,           -- first occurrence date
+    last_applied TEXT DEFAULT NULL,
+    active       INTEGER NOT NULL DEFAULT 1
 );
 ```
 
-Soft-deleted records are never permanently removed. `list_expenses` and `summarize` automatically exclude them. Use `list_deleted_expenses` to see them and `restore_expense` / `restore_category` to bring them back.
+All tables and columns are **auto-created and migrated** on server startup — no manual SQL needed.
 
 ---
 
 ## Categories
 
-The server exposes a `expense://categories` resource with 20 top-level categories and subcategories:
+The server exposes `expense://categories` with 20 top-level categories:
 
-`food`, `transport`, `housing`, `utilities`, `health`, `education`, `family_kids`, `entertainment`, `shopping`, `subscriptions`, `personal_care`, `gifts_donations`, `finance_fees`, `business`, `travel`, `home`, `pet`, `taxes`, `investments`, `misc`
+`food` · `transport` · `housing` · `utilities` · `health` · `education` · `family_kids` · `entertainment` · `shopping` · `subscriptions` · `personal_care` · `gifts_donations` · `finance_fees` · `business` · `travel` · `home` · `pet` · `taxes` · `investments` · `misc`
 
-When using Claude, it reads this resource automatically to pick the right category when you describe an expense in natural language.
+Claude reads this resource automatically to pick the right category from natural language descriptions.
 
 ---
 
@@ -279,14 +242,28 @@ When using Claude, it reads this resource automatically to pick the right catego
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection URL — if not set, SQLite is used |
-| `PORT` | Server port (default: 8000, auto-set by Render) |
+| `DATABASE_URL` | PostgreSQL URL — if unset, SQLite is used locally |
+| `PORT` | Server port (default 8000, auto-set by Render) |
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| MCP Framework | FastMCP 3.2.x |
+| Language | Python 3.13+ |
+| Package Manager | uv |
+| Local DB | SQLite (auto) |
+| Cloud DB | PostgreSQL (Render free tier) |
+| Hosting | Render |
+| Transport (local) | stdio |
+| Transport (remote) | streamable-http |
 
 ---
 
 ## Render Free Tier Notes
 
-- Web service sleeps after 15 minutes of inactivity
-- First request after sleep takes ~30 seconds (cold start)
-- PostgreSQL database persists forever
-- 750 free hours/month for the web service
+- Web service sleeps after 15 min of inactivity — first request takes ~30s (cold start)
+- PostgreSQL persists forever
+- 750 free hours/month

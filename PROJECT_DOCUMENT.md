@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is a **Model Context Protocol (MCP) server** for tracking personal expenses. It exposes nine AI-callable tools and one resource that allow Claude (Desktop or Web) to add, list, summarize, update, delete, and restore expenses stored in a database.
+A **Model Context Protocol (MCP) server** for tracking personal expenses with AI. Exposes 21 tools and 1 resource that allow Claude to add, list, search, summarize, update, delete, restore, budget, automate recurring expenses, and generate analytics — all via natural language conversation.
 
 ---
 
@@ -26,34 +26,31 @@ This project is a **Model Context Protocol (MCP) server** for tracking personal 
 
 ```
 expense-tracker/
-├── main.py           # MCP server with all tools and resources
-├── categories.json   # Valid expense categories and subcategories
-├── pyproject.toml    # Project dependencies
-├── Procfile          # Render start command
-├── expenses.db       # Local SQLite database (auto-created)
-└── .venv/            # Virtual environment
+├── main.py               # MCP server — all 21 tools and resources
+├── categories.json       # 20 expense categories with subcategories
+├── pyproject.toml        # Python dependencies
+├── Procfile              # Render start command
+├── README.md             # Setup and usage guide
+├── PROJECT_DOCUMENT.md   # This file — full project documentation
+├── expenses.db           # Local SQLite database (auto-created)
+└── .venv/                # Virtual environment
 ```
 
 ---
 
 ## Step 1 — Project Setup
 
-### Initialize with uv
-
 ```bash
-mkdir expense-tracker
-cd expense-tracker
+mkdir expense-tracker && cd expense-tracker
 uv init
 uv add fastmcp psycopg2-binary
 ```
 
 ### pyproject.toml
-
 ```toml
 [project]
 name = "expense-tracker"
 version = "0.1.0"
-description = "Expense Tracker MCP Server"
 requires-python = ">=3.13"
 dependencies = [
     "fastmcp>=3.2.3",
@@ -63,352 +60,220 @@ dependencies = [
 
 ---
 
-## Step 2 — MCP Server Code
+## Step 2 — Database Schema
 
-### main.py (Final Version)
+Three tables. All created and migrated automatically on server startup — no manual SQL needed.
 
-```python
-from fastmcp import FastMCP
-import os
-from datetime import datetime, timezone
-
-DATABASE_URL = os.environ.get("DATABASE_URL")
-USE_POSTGRES = DATABASE_URL is not None
-CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
-
-if USE_POSTGRES:
-    import psycopg2
-    import psycopg2.extras
-else:
-    import sqlite3
-    DB_PATH = os.path.join(os.path.dirname(__file__), "expenses.db")
-
-mcp = FastMCP("ExpenseTracker")
-
-
-def get_conn():
-    if USE_POSTGRES:
-        return psycopg2.connect(DATABASE_URL)
-    return sqlite3.connect(DB_PATH)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-    if USE_POSTGRES:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS expenses(
-                id SERIAL PRIMARY KEY,
-                date TEXT NOT NULL,
-                amount REAL NOT NULL,
-                category TEXT NOT NULL,
-                subcategory TEXT DEFAULT '',
-                note TEXT DEFAULT '',
-                deleted_at TEXT DEFAULT NULL
-            )
-        """)
-        cur.execute("ALTER TABLE expenses ADD COLUMN IF NOT EXISTS deleted_at TEXT DEFAULT NULL")
-    else:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS expenses(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                amount REAL NOT NULL,
-                category TEXT NOT NULL,
-                subcategory TEXT DEFAULT '',
-                note TEXT DEFAULT '',
-                deleted_at TEXT DEFAULT NULL
-            )
-        """)
-        try:
-            cur.execute("ALTER TABLE expenses ADD COLUMN deleted_at TEXT DEFAULT NULL")
-        except Exception:
-            pass  # Column already exists
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-init_db()
-
-
-@mcp.tool()
-def add_expense(date, amount, category, subcategory="", note=""):
-    """Add a new expense entry to the database."""
-    conn = get_conn()
-    cur = conn.cursor()
-    if USE_POSTGRES:
-        cur.execute(
-            "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (%s,%s,%s,%s,%s) RETURNING id",
-            (date, amount, category, subcategory, note)
-        )
-        expense_id = cur.fetchone()[0]
-    else:
-        cur.execute(
-            "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
-            (date, amount, category, subcategory, note)
-        )
-        expense_id = cur.lastrowid
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "ok", "id": expense_id}
-
-
-@mcp.tool()
-def summarize(start_date, end_date, category=None):
-    """Summarize expenses by category within an inclusive date range. Excludes deleted expenses."""
-    conn = get_conn()
-    if USE_POSTGRES:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        ph = "%s"
-    else:
-        cur = conn.cursor()
-        ph = "?"
-    query = f"""
-        SELECT category, SUM(amount) AS total_amount
-        FROM expenses
-        WHERE date BETWEEN {ph} AND {ph}
-        AND deleted_at IS NULL
-    """
-    params = [start_date, end_date]
-    if category:
-        query += f" AND category = {ph}"
-        params.append(category)
-    query += " GROUP BY category ORDER BY category ASC"
-    cur.execute(query, params)
-    if USE_POSTGRES:
-        result = [dict(row) for row in cur.fetchall()]
-    else:
-        cols = [d[0] for d in cur.description]
-        result = [dict(zip(cols, r)) for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return result
-
-
-@mcp.tool()
-def list_expenses(start_date, end_date):
-    """List active (non-deleted) expense entries within an inclusive date range."""
-    conn = get_conn()
-    ph = "%s" if USE_POSTGRES else "?"
-    if USE_POSTGRES:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    else:
-        cur = conn.cursor()
-    cur.execute(f"""
-        SELECT id, date, amount, category, subcategory, note
-        FROM expenses
-        WHERE date BETWEEN {ph} AND {ph}
-        AND deleted_at IS NULL
-        ORDER BY id ASC
-    """, (start_date, end_date))
-    if USE_POSTGRES:
-        result = [dict(row) for row in cur.fetchall()]
-    else:
-        cols = [d[0] for d in cur.description]
-        result = [dict(zip(cols, r)) for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return result
-
-
-@mcp.tool()
-def update_expense(expense_id: int, amount: float = None, category: str = None,
-                   date: str = None, note: str = None, subcategory: str = None) -> dict:
-    """Update an existing expense by its ID."""
-    ph = "%s" if USE_POSTGRES else "?"
-    fields = []
-    values = []
-    if amount is not None:
-        fields.append(f"amount = {ph}"); values.append(amount)
-    if category is not None:
-        fields.append(f"category = {ph}"); values.append(category)
-    if date is not None:
-        fields.append(f"date = {ph}"); values.append(date)
-    if note is not None:
-        fields.append(f"note = {ph}"); values.append(note)
-    if subcategory is not None:
-        fields.append(f"subcategory = {ph}"); values.append(subcategory)
-
-    if not fields:
-        return {"status": "error", "message": "No fields to update"}
-
-    values.append(expense_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = {ph} AND deleted_at IS NULL", values)
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "ok", "updated_id": expense_id}
-
-
-@mcp.tool()
-def delete_expense(expense_id: int) -> dict:
-    """Soft-delete a single expense by its ID. Can be restored with restore_expense."""
-    ph = "%s" if USE_POSTGRES else "?"
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        f"UPDATE expenses SET deleted_at = {ph} WHERE id = {ph} AND deleted_at IS NULL",
-        (_now(), expense_id)
-    )
-    affected = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    if affected == 0:
-        return {"status": "error", "message": f"Expense {expense_id} not found or already deleted"}
-    return {"status": "ok", "deleted_id": expense_id}
-
-
-@mcp.tool()
-def delete_category(category: str) -> dict:
-    """Soft-delete ALL expenses in a given category. Can be restored with restore_category."""
-    ph = "%s" if USE_POSTGRES else "?"
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        f"UPDATE expenses SET deleted_at = {ph} WHERE category = {ph} AND deleted_at IS NULL",
-        (_now(), category)
-    )
-    affected = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "ok", "category": category, "deleted_count": affected}
-
-
-@mcp.tool()
-def list_deleted_expenses(category: str = None) -> list:
-    """List all soft-deleted expenses. Optionally filter by category."""
-    conn = get_conn()
-    ph = "%s" if USE_POSTGRES else "?"
-    if USE_POSTGRES:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    else:
-        cur = conn.cursor()
-    query = """
-        SELECT id, date, amount, category, subcategory, note, deleted_at
-        FROM expenses
-        WHERE deleted_at IS NOT NULL
-    """
-    params = []
-    if category:
-        query += f" AND category = {ph}"
-        params.append(category)
-    query += " ORDER BY deleted_at DESC"
-    cur.execute(query, params)
-    if USE_POSTGRES:
-        result = [dict(row) for row in cur.fetchall()]
-    else:
-        cols = [d[0] for d in cur.description]
-        result = [dict(zip(cols, r)) for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return result
-
-
-@mcp.tool()
-def restore_expense(expense_id: int) -> dict:
-    """Restore a previously soft-deleted expense by its ID."""
-    ph = "%s" if USE_POSTGRES else "?"
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        f"UPDATE expenses SET deleted_at = NULL WHERE id = {ph} AND deleted_at IS NOT NULL",
-        (expense_id,)
-    )
-    affected = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    if affected == 0:
-        return {"status": "error", "message": f"Expense {expense_id} not found or not deleted"}
-    return {"status": "ok", "restored_id": expense_id}
-
-
-@mcp.tool()
-def restore_category(category: str) -> dict:
-    """Restore all soft-deleted expenses in a given category."""
-    ph = "%s" if USE_POSTGRES else "?"
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        f"UPDATE expenses SET deleted_at = NULL WHERE category = {ph} AND deleted_at IS NOT NULL",
-        (category,)
-    )
-    affected = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "ok", "category": category, "restored_count": affected}
-
-
-@mcp.resource("expense://categories", mime_type="application/json")
-def categories():
-    """Return the list of valid expense categories and subcategories."""
-    with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+### expenses
+```sql
+CREATE TABLE expenses (
+    id           SERIAL PRIMARY KEY,
+    date         TEXT NOT NULL,           -- YYYY-MM-DD
+    amount       REAL NOT NULL,
+    category     TEXT NOT NULL,
+    subcategory  TEXT DEFAULT '',
+    note         TEXT DEFAULT '',
+    deleted_at   TEXT DEFAULT NULL,       -- NULL=active, ISO timestamp=soft-deleted
+    recurring_id INTEGER DEFAULT NULL     -- FK to recurring_expenses.id
+);
 ```
 
+### budgets
+```sql
+CREATE TABLE budgets (
+    id         SERIAL PRIMARY KEY,
+    category   TEXT NOT NULL,
+    amount     REAL NOT NULL,
+    period     TEXT NOT NULL DEFAULT 'monthly',  -- monthly | weekly | yearly
+    created_at TEXT NOT NULL,
+    UNIQUE(category, period)
+);
+```
+
+### recurring_expenses
+```sql
+CREATE TABLE recurring_expenses (
+    id           SERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    amount       REAL NOT NULL,
+    category     TEXT NOT NULL,
+    subcategory  TEXT DEFAULT '',
+    note         TEXT DEFAULT '',
+    frequency    TEXT NOT NULL,     -- daily | weekly | monthly | yearly
+    start_date   TEXT NOT NULL,     -- YYYY-MM-DD, first occurrence
+    last_applied TEXT DEFAULT NULL, -- display hint for last generation
+    active       INTEGER DEFAULT 1
+);
+```
+
+### Migration strategy
+`init_db()` runs on every server start. It uses:
+- PostgreSQL: `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+- SQLite: `ALTER TABLE ... ADD COLUMN` wrapped in try/except
+
+This means existing production databases are migrated automatically on redeploy — no manual `psql` commands.
+
 ---
 
-## Step 3 — Categories Resource
+## Step 3 — All Tools (21)
 
-`categories.json` defines 20 top-level categories, each with subcategories. The MCP server exposes this as a resource at `expense://categories`.
+### Core expense tools
 
-Claude reads this resource automatically when you describe an expense in natural language — it picks the matching category and subcategory before calling `add_expense`.
+**`add_expense(date, amount, category, subcategory="", note="")`**
+Add a new expense. Returns `{"status": "ok", "id": N}`.
 
-Example categories: `food`, `transport`, `housing`, `utilities`, `health`, `education`, `shopping`, `travel`, `investments`, `misc` (20 total).
+**`list_expenses(start_date, end_date, category=None, subcategory=None)`**
+List active (non-deleted) expenses in a date range. Optional category/subcategory filters added in v2.
+
+**`summarize(start_date, end_date, category=None, group_by_subcategory=False)`**
+Total spending by category. Set `group_by_subcategory=True` with a `category` filter to drill into subcategories (e.g. "break down my food spending").
+
+**`update_expense(expense_id, amount, category, date, note, subcategory)`**
+Update any field of an active expense. Only updates fields that are passed.
+
+**`search_expenses(keyword, start_date, end_date, category, min_amount, max_amount)`**
+Full-text keyword search across note, category, subcategory. All params except `keyword` are optional. Supports amount range filtering.
+
+**`top_expenses(start_date, end_date, limit=10, category=None)`**
+Returns the N largest individual expenses in a date range, sorted by amount descending.
+
+### Soft-delete & restore tools
+
+Deleted records are never permanently removed. `deleted_at` stores the UTC timestamp of deletion.
+
+**`delete_expense(expense_id)`**
+Soft-delete a single expense. Returns error if already deleted.
+
+**`delete_category(category)`**
+Soft-delete ALL active expenses in a category at once. Returns `deleted_count`.
+
+**`list_deleted_expenses(category=None)`**
+View all soft-deleted expenses with `deleted_at` timestamps. Optional category filter.
+
+**`restore_expense(expense_id)`**
+Restore a single deleted expense (sets `deleted_at = NULL`).
+
+**`restore_category(category)`**
+Restore all deleted expenses in a category. Returns `restored_count`.
+
+### Budget tools
+
+**`set_budget(category, amount, period="monthly")`**
+Set or update a spending limit. Upsert — calling twice updates, never duplicates.
+`period` accepts: `monthly`, `weekly`, `yearly`.
+
+**`get_budget_status(period_start, period_end, category=None)`**
+Compare actual spending against budgets. Returns per-category:
+```json
+{
+  "category": "food",
+  "budget": 5000.0,
+  "spent": 3200.0,
+  "remaining": 1800.0,
+  "pct_used": 64.0,
+  "status": "on_track"    // on_track | near_limit (≥80%) | over_budget
+}
+```
+
+**`list_budgets()`**
+View all configured budgets.
+
+**`delete_budget(category, period="monthly")`**
+Remove a budget.
+
+### Recurring expense tools
+
+**`add_recurring(name, amount, category, frequency, start_date, subcategory="", note="")`**
+Create a recurring template. `frequency`: `daily | weekly | monthly | yearly`.
+`start_date`: first occurrence date (YYYY-MM-DD).
+
+**`list_recurring()`**
+View all active templates with `last_applied` date.
+
+**`apply_recurring(as_of_date=None)`**
+The core automation tool. Generates all missing expense entries for every active template from `start_date` up to `as_of_date` (defaults to today).
+
+**Idempotent by design:** Checks existing `expenses` rows with matching `recurring_id + date` before inserting. Calling it 10 times produces the same result as calling it once — never double-inserts.
+
+Call this at the start of each session or when the user asks "am I up to date?" Returns:
+```json
+{
+  "status": "ok",
+  "total_entries_added": 2,
+  "applied": [
+    {"name": "Rent", "dates_added": ["2026-04-01"]},
+    {"name": "Netflix", "dates_added": ["2026-04-01"]}
+  ]
+}
+```
+
+**`delete_recurring(recurring_id)`**
+Hard-delete a template (stops future generation). Does not affect already-generated expenses.
+
+### Analytics tools
+
+**`monthly_report(year, month)`**
+Comprehensive monthly summary in one call:
+```json
+{
+  "month": "2026-04",
+  "total_spent": 32436.49,
+  "by_category": [
+    {"category": "housing", "total": 30000.0, "pct": 92.5},
+    ...
+  ],
+  "top_expenses": [...],
+  "budget_alerts": [
+    {"category": "food", "budget": 5000, "spent": 6200, "over_by": 1200, "status": "over_budget"}
+  ],
+  "daily_totals": {"2026-04-01": 30998.0, "2026-04-15": 805.0, ...}
+}
+```
+
+**`spending_trend(months=3, category=None)`**
+Month-over-month totals for last N months with % change:
+```json
+[
+  {"month": "2026-02", "total": 28000.0},
+  {"month": "2026-03", "total": 31000.0, "change_pct": 10.7},
+  {"month": "2026-04", "total": 32436.0, "change_pct": 4.6}
+]
+```
+
+### Resource
+
+**`expense://categories`** (MIME: application/json)
+Returns `categories.json` — 20 top-level categories each with subcategories. Claude reads this automatically to map natural language descriptions to the correct category/subcategory before calling `add_expense`.
 
 ---
 
-## Step 4 — Tools and Resources Exposed
+## Step 4 — categories.json
 
-### Tools
+20 categories with subcategories:
 
-| Tool | Description | Required Params |
-|------|-------------|-----------------|
-| `add_expense` | Add a new expense | date, amount, category |
-| `list_expenses` | List active expenses in a date range | start_date, end_date |
-| `summarize` | Total by category in a date range | start_date, end_date |
-| `update_expense` | Update an existing expense by ID | expense_id |
-| `delete_expense` | Soft-delete a single expense | expense_id |
-| `delete_category` | Soft-delete all expenses in a category | category |
-| `list_deleted_expenses` | View deleted expenses | — (optional: category) |
-| `restore_expense` | Restore a single deleted expense | expense_id |
-| `restore_category` | Restore all deleted expenses in a category | category |
-
-### Resources
-
-| Resource URI | MIME Type | Description |
-|--------------|-----------|-------------|
-| `expense://categories` | application/json | Valid categories and subcategories |
+| Category | Example Subcategories |
+|----------|-----------------------|
+| food | groceries, dining_out, delivery_fees, coffee_tea |
+| transport | fuel, cab_ride_hailing, public_transport, parking |
+| housing | rent, maintenance_hoa, repairs_service |
+| utilities | electricity, internet_broadband, mobile_phone |
+| health | medicines, doctor_consultation, fitness_gym |
+| education | courses, books, online_subscriptions |
+| shopping | clothing, electronics_gadgets, home_decor |
+| subscriptions | saas_tools, cloud_ai, music_video |
+| travel | flights, hotels, local_transport |
+| investments | mutual_funds, stocks, crypto |
+| … | (20 total — see categories.json) |
 
 ---
 
 ## Step 5 — Local Setup (Claude Desktop)
 
-Claude Desktop spawns the server automatically via stdio — no manual server start needed.
+Claude Desktop spawns the server via stdio — no manual server start needed.
 
-### Claude Desktop Config
-
-File location:
-```
-Windows: %APPDATA%\Claude\claude_desktop_config.json
-macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
-```
+### Config file location
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -416,11 +281,7 @@ macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
     "expense-tracker": {
       "command": "C:\\path\\to\\uv.exe",
       "args": [
-        "run",
-        "--with",
-        "fastmcp",
-        "fastmcp",
-        "run",
+        "run", "--with", "fastmcp", "fastmcp", "run",
         "C:\\path\\to\\expense-tracker\\main.py"
       ],
       "env": {}
@@ -429,152 +290,108 @@ macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
 }
 ```
 
-### How it works locally
+### Flow
 ```
-Claude Desktop
-     ↓ stdio (spawns process)
-fastmcp run main.py
-     ↓
-expenses.db (SQLite on local machine)
+Claude Desktop ──stdio──► fastmcp run main.py ──► SQLite (expenses.db)
 ```
 
 ---
 
 ## Step 6 — Remote Deployment (Render)
 
-### Why deploy remotely?
-- Local setup requires your laptop to be ON
-- Remote deployment makes the server accessible 24/7 from any device
-
 ### Procfile
 ```
 web: python main.py
 ```
 
-### Deployment Steps
+### Deploy steps
+1. Push to GitHub
+2. Render → New Web Service → connect repo
+3. **Build command:** `pip install fastmcp psycopg2-binary`
+4. **Start command:** `python main.py`
+5. Render → New PostgreSQL → free tier → copy Internal URL
+6. Web service → Environment → add `DATABASE_URL` → save → auto-redeploys
 
-1. Push code to GitHub:
-```bash
-git init
-git add main.py categories.json pyproject.toml Procfile README.md
-git commit -m "Initial expense tracker MCP server"
-git remote add origin https://github.com/<username>/expense-tracker.git
-git branch -M main
-git push -u origin main
+### Flow
+```
+claude.ai / any device ──HTTPS──► Render ──► FastMCP ──► PostgreSQL
 ```
 
-2. Go to render.com → New Web Service → Connect GitHub repo
-3. Set:
-   - **Build Command:** `pip install fastmcp psycopg2-binary`
-   - **Start Command:** `python main.py`
-   - **Plan:** Free
-4. Click Deploy
-
-### Add PostgreSQL (Persistent Database)
-
-1. Render dashboard → New → PostgreSQL → Free tier → Create
-2. Copy the **Internal Database URL**
-3. Go to your web service → Environment tab
-4. Add environment variable:
-   - Key: `DATABASE_URL`
-   - Value: (paste Internal Database URL)
-5. Save → auto redeploys
-
-### How it works on Render
-```
-claude.ai web / any device
-     ↓ HTTPS
-https://<your-app>.onrender.com/mcp
-     ↓
-FastMCP (streamable-http transport)
-     ↓
-PostgreSQL (persistent, free tier)
-```
+### Render free tier notes
+- Web service sleeps after 15 min inactivity (30s cold start)
+- PostgreSQL persists forever
+- 750 free hours/month
 
 ---
 
 ## Step 7 — Cloudflare Tunnel (Optional)
 
-Used to expose the local server to the internet without deploying to cloud.
+Expose local server to the internet without Render.
 
-### Install cloudflared (no admin required)
 ```bash
+# Install cloudflared
 curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -o "$HOME/.local/bin/cloudflared.exe"
-```
 
-### Create named tunnel
-1. Go to Cloudflare Dashboard → Zero Trust → Networks → Tunnels
-2. Create tunnel → Name it → Copy the token
-3. Add public hostname:
-   - Subdomain: `mcp`
-   - Domain: your domain
-   - Service: `http://localhost:8000`
+# Create named tunnel in Cloudflare dashboard → Zero Trust → Networks → Tunnels
+# Add hostname: subdomain=mcp, service=http://localhost:8000
 
-### Run tunnel
-```bash
+# Run server
+uv run python main.py
+
+# Run tunnel
 ~/.local/bin/cloudflared.exe tunnel run --token <YOUR_TOKEN>
 ```
 
-### Run MCP server for tunnel
-```bash
-cd expense-tracker
-uv run python main.py
+### Flow
 ```
-
-> **Note:** Tunnel requires both the MCP server and cloudflared running simultaneously. Render deployment is preferred for always-on access.
+claude.ai ──HTTPS──► Cloudflare ──► cloudflared ──► main.py ──► SQLite
+```
 
 ---
 
 ## Step 8 — Connecting claude.ai Web
 
-1. Go to claude.ai → Settings → Connectors → `+`
-2. Paste your Render URL: `https://<your-app>.onrender.com/mcp`
-3. Name it → Save
-4. All 9 tools and the categories resource appear automatically
+1. claude.ai → Settings → Connectors → `+`
+2. URL: `https://<your-app>.onrender.com/mcp`
+3. Save — all 21 tools load automatically
 
 ---
 
 ## Step 9 — Testing with MCP Inspector
 
-MCP Inspector is a browser-based UI for testing MCP servers interactively without needing Claude.
-
-### Prerequisites
-- Node.js v18+
-
-### Steps
-
-**1. Start the inspector**
+### Start inspector
 ```bash
 npx @modelcontextprotocol/inspector
 ```
 
-If you get npm cache errors, clear the cache first:
+If npm cache is corrupted (Windows):
 ```bash
 npx clear-npx-cache
+# Kill existing node processes, then:
+npx @modelcontextprotocol/inspector
 ```
 
-**2. Open the printed URL**
-```
-http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<token>
-```
-
-**3. Connect to your server**
+### Connect
+- Open printed URL: `http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<token>`
 - Transport → `Streamable HTTP`
 - URL → `https://<your-app>.onrender.com/mcp`
-- Click **Connect**
+- Click Connect
 
-**4. Test tools interactively**
-- **Tools tab** → click any tool → fill params → Run Tool
-- **Resources tab** → click `expense://categories` → see all valid categories
-
-### Example test flow
+### Inspector proxy architecture
 ```
-1. add_expense      → date=2026-04-15, amount=150, category=food, subcategory=groceries
-2. list_expenses    → start_date=2026-04-15, end_date=2026-04-15
-3. summarize        → start_date=2026-04-01, end_date=2026-04-30
-4. delete_expense   → expense_id=<id from step 1>
-5. list_deleted_expenses → (no params needed)
-6. restore_expense  → expense_id=<same id>
+Browser ──► Inspector UI (6274) ──► Proxy server (6277) ──► MCP Server (Render)
+```
+
+### Example test sequence
+```
+1. set_budget          category=food, amount=5000
+2. add_recurring       name=Rent, amount=15000, category=housing, frequency=monthly, start_date=2026-04-01
+3. apply_recurring     (no params)
+4. get_budget_status   period_start=2026-04-01, period_end=2026-04-30
+5. monthly_report      year=2026, month=4
+6. spending_trend      months=3
+7. search_expenses     keyword=rent
+8. top_expenses        start_date=2026-04-01, end_date=2026-04-30, limit=5
 ```
 
 ---
@@ -583,92 +400,82 @@ http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<token>
 
 ### Local (Claude Desktop)
 ```
-Claude Desktop ──stdio──► fastmcp run main.py ──► SQLite (expenses.db)
+Claude Desktop ──stdio──► fastmcp run main.py ──► SQLite
 ```
 
-### Remote (claude.ai Web / Any Device)
+### Remote (claude.ai / any MCP client)
 ```
-claude.ai web ──HTTPS──► Render (main.py) ──► PostgreSQL (persistent)
-```
-
-### Tunnel (Optional / Temporary)
-```
-claude.ai web ──HTTPS──► Cloudflare ──► cloudflared ──► main.py ──► SQLite
+Claude / MCP Client ──HTTPS──► Render ──► PostgreSQL
 ```
 
-### MCP Inspector (Testing)
+### Tunnel (optional, temporary)
 ```
-Browser ──► Inspector UI ──► Proxy (localhost:6277) ──► MCP Server (Render/local)
+Claude ──HTTPS──► Cloudflare ──► cloudflared ──► main.py ──► SQLite
+```
+
+### MCP Inspector (testing)
+```
+Browser ──► Inspector UI ──► Proxy ──► MCP Server
 ```
 
 ---
 
-## Step 11 — Database Schema
-
-```sql
-CREATE TABLE expenses (
-    id          SERIAL PRIMARY KEY,       -- INTEGER AUTOINCREMENT in SQLite
-    date        TEXT NOT NULL,            -- Format: YYYY-MM-DD
-    amount      REAL NOT NULL,
-    category    TEXT NOT NULL,
-    subcategory TEXT DEFAULT '',
-    note        TEXT DEFAULT '',
-    deleted_at  TEXT DEFAULT NULL         -- NULL = active, ISO timestamp = soft-deleted
-);
-```
-
-### Soft-delete behaviour
-- `delete_expense` / `delete_category` → sets `deleted_at` to current UTC timestamp
-- `restore_expense` / `restore_category` → sets `deleted_at` back to NULL
-- `list_expenses` and `summarize` always filter `WHERE deleted_at IS NULL`
-- `list_deleted_expenses` shows only rows `WHERE deleted_at IS NOT NULL`
-- Nothing is ever permanently deleted — full rollback is always possible
-
----
-
-## Step 12 — Key Decisions & Lessons
+## Step 11 — Key Decisions & Lessons
 
 | Decision | Reason |
 |----------|--------|
-| FastMCP over raw MCP SDK | Simpler decorator-based API, less boilerplate |
-| stdio for Claude Desktop | Most reliable, no OAuth needed, no networking |
-| streamable-http for remote | Required by claude.ai web (newer MCP protocol) |
-| PostgreSQL on Render | SQLite resets on every Render restart (ephemeral filesystem) |
-| Dual SQLite/PostgreSQL support | Local dev uses SQLite, production uses PostgreSQL — no config change needed |
-| Placeholder abstraction (`ph`) | `%s` for PostgreSQL, `?` for SQLite — one codebase works for both |
-| Soft-delete over hard-delete | Never lose data — full rollback available via restore tools |
-| `deleted_at` timestamp | Records when deletion happened, useful for audit trail |
-| categories.json as MCP resource | Claude reads it at runtime to pick correct category — editable without restart |
-| Cloudflare Tunnel | Allows testing remote access without deploying to cloud |
-| Environment variable for DB URL | Never hardcode credentials in source code |
-
----
-
-## Render Free Tier Notes
-
-- Web service **sleeps after 15 minutes** of inactivity
-- First request after sleep takes ~30 seconds (cold start)
-- PostgreSQL database **persists forever** (does not reset)
-- 750 free hours/month for web service
+| FastMCP over raw SDK | Decorator-based API, minimal boilerplate |
+| stdio for Claude Desktop | No OAuth, no networking, most reliable |
+| streamable-http for remote | Required by claude.ai web |
+| PostgreSQL on Render | SQLite resets on every Render restart (ephemeral fs) |
+| Dual SQLite/PostgreSQL | `ph = "%s" if USE_POSTGRES else "?"` — one codebase, both DBs |
+| `init_db()` auto-migration | `ALTER TABLE ADD COLUMN IF NOT EXISTS` — zero manual DB ops on redeploy |
+| Soft-delete over hard-delete | Never lose data — full rollback always available |
+| `recurring_id` on expenses | Enables idempotent `apply_recurring` via set subtraction |
+| `apply_recurring` idempotency | Checks `(recurring_id, date)` pairs before inserting — safe to call anytime |
+| Upsert for budgets | `ON CONFLICT DO UPDATE` — set_budget is also update_budget |
+| `group_by_subcategory` in summarize | Drill-down without a separate tool |
+| categories.json as MCP resource | Claude reads it at runtime — editable without restart |
+| Environment variable for DB URL | Credentials never in source code |
 
 ---
 
 ## Usage Examples
 
-Once connected, use natural language in Claude:
-
 ```
-"Add an expense of $500 for groceries on 2026-04-15"
-"List all my expenses from April 1 to April 30"
-"Summarize my expenses for this month"
-"Update expense #3, change the amount to $250"
-"Delete expense #5"
-"Delete all my food expenses"
-"Show me what I deleted today"
-"Restore all food expenses"
-"What expense categories are available?"
+# Daily use
+"Add ₹200 for coffee today"
+"I spent ₹3500 on groceries — log it under food"
+"What did I spend today?"
+
+# Budgets
+"Set a ₹8000 monthly budget for food"
+"How am I doing on my budget this month?"
+"Show all my budgets"
+
+# Recurring
+"Set rent as ₹15000 recurring on the 1st of every month"
+"Apply my recurring expenses"
+"Stop my Netflix recurring"
+
+# Reports & analytics
+"Give me a full report for April"
+"Show my spending trend for the last 3 months"
+"What are my top 5 expenses this month?"
+"Break down my food spending into subcategories"
+
+# Search
+"Find all Zomato expenses"
+"Show expenses over ₹5000 in April"
+"Search for anything tagged 'business trip'"
+
+# Delete & restore
+"Delete expense #12"
+"Delete all my entertainment expenses"
+"Show me what I deleted"
+"Restore my food expenses"
 ```
 
 ---
 
-*Document prepared for Expense Tracker MCP Server project.*
+*Document prepared for Expense Tracker MCP Server v2 — 21 tools, budgets, recurring expenses, analytics.*
